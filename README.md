@@ -10,7 +10,14 @@ Several libraries are required for the device to work.
 - Adafruit_GFX_Library by Adafruit
 - Ai_Esp32_Rotary_Encoder by Igor Antolic
 - KasaSmartDevice by Justin Ham
+    - Modified version of the [KasaSmartPlug](https://github.com/kj831ca/KasaSmartPlug?tab=readme-ov-file) library by Kris Jearakul to be compatible with Smart Bulbs and Smart Plugs.
 - ArduinoJson by Benoit Blanchon
+
+# Features
+- Quick communication with light bulbs using the TP-Link Smart Home Protocol which is a TCP/IP Protocol that sends JSON payloads to devices. 
+- Rotary Knob allows the control of brightness for multiple bulbs at the same time which is not available in the Kasa app.
+- OLED Display for bulb management and view of device states such as (On, Off, Error).
+- Battery powered with built in sleep mode. Battery should last for ~160 days and recharges with standard 5V USB-C phone charger.
 
 # Designs
 
