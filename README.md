@@ -24,7 +24,7 @@ Several libraries are required for the device to work.
 ## Device Render
 Device was designed with Fusion and prototype was printed using an Ender 3 Pro 3D Printer.
 
-![Device Render](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Case-Render.jpg)
+![Device Render](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Case.png)
 
 ## OLED Display
 - Menu
