@@ -9,7 +9,7 @@ Several libraries are required for the device to work.
 - Adafruit_BusIO by Adafruit
 - Adafruit_GFX_Library by Adafruit
 - Ai_Esp32_Rotary_Encoder by Igor Antolic
-- KasaSmartDevice by Justin Ham
+- KasaSmartPlug updated by Justin Ham
     - Modified version of the [KasaSmartPlug](https://github.com/kj831ca/KasaSmartPlug?tab=readme-ov-file) library by Kris Jearakul to be compatible with Smart Bulbs and Smart Plugs.
 - ArduinoJson by Benoit Blanchon
 
@@ -25,6 +25,17 @@ Several libraries are required for the device to work.
 Device was designed with Fusion and prototype was printed using an Ender 3 Pro 3D Printer.
 
 ![Device Render](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Case-Render.jpg)
+
+## OLED Display
+- Menu
+    - List of all bulbs and a dedicated "Reset" command for the ESP32 microcontroller. 
+        - Although the firmware has auto update for dynamic IP assignment, it may have issue updating to the most recent IP address of the bulb.
+        - The reset button can be used to restart the device and connect to the new IP.
+- Bulbs show the current state of the bulb 
+    - On
+    - Off
+    - Error (Exclamation icon)
+- Changing the brightness will show the current brightness as a progress bar.
 
 ## Inputs
 - 2 Rotary Encoders
@@ -46,6 +57,17 @@ User can control their light bulbs in several different ways
 
 # Set Up Guide
 
+1. Gather all materials listed in the parts document, you can order the PCB using the provided files or wire the device with a breadboard following the schematics. 
+2. Prepare config file before flashing the device (Instruction shown below).
+3. Once the device is put together, flash the device with the firmware and required libraries using the Arduino IDE.
+4. Device set up will run automatically on initial start up. 
+    - This step includes the device searching for bulbs as outlined in the config file on the local wifi network.
+    - Having the device connected to a computer and reading the Serial output will help with any connectivity issues. 
+    - Notes about better connection below
+5. Once set up, all lightbulbs named in the config file should show up on the main menu.
+6. The first 5 lights can be toggled with the 5 switches.
+
+## Config File Instruction
 In order to flash the ESP32 module with the firmware, the user must update the config file with some information.
 - Home Wifi SSID (name) and Password
 - Names of all light bulbs they want
@@ -65,7 +87,8 @@ char* aliases[] = {
   "<User Bulb Name 3>"
 };
 
-const int size = 3;
+//Total number of bulbs, needs to match the number of bulb names above.
+const int size = 0;
 
 //Time between inactivity and sleep
 const int inactivity_time = 15000;
@@ -80,3 +103,9 @@ const int max_brightness = 100;
 On start up, the ESP32 will begin to look for bulbs that are active and add them to the device's list of bulbs if the name is included in the config file.
 
 For best results, please turn the smart bulb on with a phone during the set up.
+
+# Future Plans
+- Light temperature and color control.
+- Custom group creations to group certain bulbs with another.
+- Better rotary knob control between menu and controlling bulbs.
+- Compatibility with devices that require Kasa Authentication such as light strips.
