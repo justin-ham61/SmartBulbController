@@ -29,7 +29,7 @@ Device was designed with Fusion and prototype was printed using an Ender 3 Pro 3
 ## First Working Prototype
 First working prototype of the controller with a custom PCB and the 3D printed case.
 
-![Prototype Image](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Controller.jpg)
+![Prototype Image](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Controller_Resized.jpg)
 
 ## OLED Display
 - Menu
