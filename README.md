@@ -26,6 +26,9 @@ Device was designed with Fusion and prototype was printed using an Ender 3 Pro 3
 
 ![Device Render](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Case-Render.jpg)
 
+## First Working Prototype
+![Prototype Image](https://github.com/justin-ham61/SmartBulbController/blob/main/images/Controller.jpg)
+
 ## OLED Display
 - Menu
     - List of all bulbs and a dedicated "Reset" command for the ESP32 microcontroller. 
