@@ -2,15 +2,16 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <set>
 #include "KasaSmartPlug.h"
 #include "config.h"
 #include "./structs/device.h"
+#include "./structs/circ_buff.h"
 #include "AiEsp32RotaryEncoder.h"
 #include "AiEsp32RotaryEncoderNumberSelector.h"
 #include "./structs/menu_item.h"
 #include "Arduino.h"
 #include "bitmap.h"
+#include <queue>
 
 //Font Imports for Display
 #include <Fonts/FreeSans9pt7b.h>
@@ -20,14 +21,14 @@
 Adafruit_SSD1306 display(128,64, &Wire, -1);
 
 //Menu Rotary Setting
-#define MENU_ROTARY_ENCODER_DT_PIN      18
-#define MENU_ROTARY_ENCODER_CLK_PIN     16
-#define MENU_ROTARY_ENCODER_BUTTON_PIN  35
+#define MENU_ROTARY_ENCODER_DT_PIN      23
+#define MENU_ROTARY_ENCODER_CLK_PIN     17
+#define MENU_ROTARY_ENCODER_BUTTON_PIN  34
 
 //Quick Rotary Setting
-#define QUICK_ROTARY_ENCODER_DT_PIN     23
-#define QUICK_ROTARY_ENCODER_CLK_PIN    17
-#define QUICK_ROTARY_ENCODER_BUTTON_PIN 34
+#define QUICK_ROTARY_ENCODER_DT_PIN     18
+#define QUICK_ROTARY_ENCODER_CLK_PIN    16
+#define QUICK_ROTARY_ENCODER_BUTTON_PIN 35
 #define ROTARY_ENCODER_VCC_PIN          -1
 #define ROTARY_ENCODER_STEPS            4
 
@@ -89,17 +90,52 @@ bool asleep = false;
 unsigned long lastUpdated = 0;
 
 //Button states
-volatile bool button1Pressed = false;
-volatile bool button2Pressed = false;
-volatile bool button3Pressed = false;
-volatile bool button4Pressed = false;
-volatile bool button5Pressed = false;
-
 volatile bool buttonPressed[] = {false, false, false, false, false};
 
+#define BUTTON_BIT_MASK_1 (0x1 << 0)
+#define BUTTON_BIT_MASK_2 (0x1 << 1)
+#define BUTTON_BIT_MASK_3 (0x1 << 2)
+#define BUTTON_BIT_MASK_4 (0x1 << 3)
+#define BUTTON_BIT_MASK_5 (0x1 << 4)
+#define FLAG_BIT_MASK (0x1 << 7)
+volatile int button_state;
+uint8_t data_space[64];
+volatile circ_buff_t button_buffer = {data_space, 0, 0, 64};
+int button_data;
+
+int circ_buff_push(volatile circ_buff_t *c, int data)
+{
+    int next;
+
+    next = c->head + 1;  // next is where head will point to after this write.
+    if (next >= c->maxlen)
+        next = 0;
+
+    if (next == c->tail)  // if the head + 1 == tail, circular buffer is full
+        return -1;
+
+    c->buffer[c->head] = data;  // Load data and then move
+    c->head = next;             // head to next data offset.
+    return 0;  // return success to indicate successful push.
+}
+
+int circ_buff_pop(volatile circ_buff_t *c, int *data)
+{
+    int next;
+
+    if (c->head == c->tail)  // if the head == tail, we don't have any data
+        return -1;
+
+    next = c->tail + 1;  // next is where tail will point to after this read.
+    if(next >= c->maxlen)
+        next = 0;
+
+    *data = c->buffer[c->tail];  // Read data and then move
+    c->tail = next;              // tail to next offset.
+    return 0;  // return success to indicate successful push.
+}
+
 KASAUtil kasaUtil;
-
-
 
 void IRAM_ATTR handleButton1() {
   if(asleep){
@@ -107,49 +143,64 @@ void IRAM_ATTR handleButton1() {
   }
   unsigned long currentMillis = millis();
   if (currentMillis - lastDebounceTime > debounceDelay) {
-    buttonPressed[0] = true;
-    lastDebounceTime = currentMillis;
+    button_state |= BUTTON_BIT_MASK_1;
+    button_state |= FLAG_BIT_MASK;
+    circ_buff_push(&button_buffer, 0);
   }
+  lastDebounceTime = currentMillis;
 }
+
 void IRAM_ATTR handleButton2() {
   if(asleep){
     return;
   }
   unsigned long currentMillis = millis();
   if (currentMillis - lastDebounceTime > debounceDelay) {
-    buttonPressed[1] = true;
-    lastDebounceTime = currentMillis;
+    button_state |= BUTTON_BIT_MASK_2;
+    button_state |= FLAG_BIT_MASK;
+    circ_buff_push(&button_buffer, 1);
   }
+  lastDebounceTime = currentMillis;
 }
+
 void IRAM_ATTR handleButton3() {
   if(asleep){
     return;
   }
   unsigned long currentMillis = millis();
   if (currentMillis - lastDebounceTime > debounceDelay) {
-    buttonPressed[2] = true;
-    lastDebounceTime = currentMillis;
+    button_state |= BUTTON_BIT_MASK_3;
+    button_state |= FLAG_BIT_MASK;
+    circ_buff_push(&button_buffer, 2);
+    
   }
+  lastDebounceTime = currentMillis;
 }
+
 void IRAM_ATTR handleButton4() {
   if(asleep){
     return;
   }
   unsigned long currentMillis = millis();
   if (currentMillis - lastDebounceTime > debounceDelay) {
-    buttonPressed[3] = true;
-    lastDebounceTime = currentMillis;
+    button_state |= BUTTON_BIT_MASK_4;
+    button_state |= FLAG_BIT_MASK;
+    circ_buff_push(&button_buffer, 3);
   }
+  lastDebounceTime = currentMillis;
 }
+
 void IRAM_ATTR handleButton5() {
   if(asleep){
     return;
   }
   unsigned long currentMillis = millis();
   if (currentMillis - lastDebounceTime > debounceDelay) {
-    buttonPressed[4] = true;
-    lastDebounceTime = currentMillis;
+    button_state |= BUTTON_BIT_MASK_5;
+    button_state |= FLAG_BIT_MASK;
+    circ_buff_push(&button_buffer, 4);
   }
+  lastDebounceTime = currentMillis;
 }
 
 void addFromConfig(UserDevice userdevices[]){
@@ -413,26 +464,13 @@ void quickToggle(int index){
   updateLastInteractedWith();
 }
 
+
 void button_loop(){
-  if (buttonPressed[0]) {
-    quickToggle(0);
-    buttonPressed[0] = false;
-  }
-  if (buttonPressed[1]) {
-    quickToggle(1);
-    buttonPressed[1] = false;
-  }
-  if (buttonPressed[2]) {
-    quickToggle(2);
-    buttonPressed[2] = false;
-  }
-  if (buttonPressed[3]) {
-    Serial.println("Button 4 pressed");
-    buttonPressed[3] = false;
-  }
-  if (buttonPressed[4]) {
-    Serial.println("Button 5 pressed");
-    buttonPressed[4] = false;
+  if(button_state & FLAG_BIT_MASK){
+    circ_buff_pop(&button_buffer, &button_data);
+    button_state &= ~(0x1 << button_data);
+    button_state &= ~FLAG_BIT_MASK;
+    quickToggle(button_data);
   }
 }
 
