@@ -203,11 +203,6 @@ void IRAM_ATTR handleButton5() {
   lastDebounceTime = currentMillis;
 }
 
-void addFromConfig(UserDevice userdevices[]){
-    for(int i = 0; i < 4; i++){
-        kasaUtil.CreateDevice(userdevices[i].name, userdevices[i].ip, userdevices[i].type);
-    }
-} 
 
 void updateLastInteractedWith(){
   for(int i = 0; i < size; i++){
@@ -474,18 +469,9 @@ void button_loop(){
   }
 }
 
-void update_loop(){
-  unsigned long curr = millis();
-  if((curr - lastUpdated) > 7200000 && bulb_state == 1){
-    kasaUtil.ScanDevicesAndAdd(1000, aliases, size);
-    lastUpdated = curr;
-  }
-}
-
 void setup() {
   //Initialize serial
   Serial.begin(115200);
-
 
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
   display.setTextColor(WHITE);
@@ -524,7 +510,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_5), handleButton5, RISING);
 
   //Initiate devices from pre defined IP addresses and aliases
-  //addFromConfig(devices);
   numberOfItems = kasaUtil.ScanDevicesAndAdd(1000, aliases, size);
   for(int i = 0; i < numberOfItems; i++){
     menuItems[i] = {kasaUtil.GetSmartPlugByIndex(i)->alias, 0};
@@ -555,7 +540,6 @@ void loop() {
     }
     button_loop();
     sleep_loop();
-    update_loop();
   }
 }
  
