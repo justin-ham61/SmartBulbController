@@ -16,8 +16,14 @@ Several libraries are required for the device to work.
 # Features
 - Quick communication with light bulbs using the TP-Link Smart Home Protocol which is a TCP/IP Protocol that sends JSON payloads to devices. 
 - Rotary Knob allows the control of brightness for multiple bulbs at the same time which is not available in the Kasa app.
+- Built on FreeRTOS for efficient and responsive device interaction.
 - OLED Display for bulb management and view of device states such as (On, Off, Error).
-- Battery powered with built in sleep mode. Battery should last for ~160 days and recharges with standard 5V USB-C phone charger.
+
+# FreeRTOS
+- WiFi related tasks are managed using Semaphores and prohibits reliant tasks from running unless a connection is successfully made.
+- User inputs are handled with ISR's that interact with RTOS queues.
+- All tasks only operate when items are added to the queue and executes them promptly.
+- Tasks notify lower priority tasks such as display task in order to update display.
 
 # Designs
 
