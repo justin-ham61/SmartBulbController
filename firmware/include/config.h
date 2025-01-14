@@ -6,17 +6,17 @@ typedef struct {
     const char* PASSWORD;
 } WifiParameters_t;
 
-const char* SSID = "Odyssey";
-const char* PASS = "Blue4524.";
+const char* SSID = "Odyssey 2.4GHz";
+const char* PASS = "blue4524";
 WifiParameters_t wifi_params = {SSID, PASS};
 
 char* aliases[] = {
   "Lauter",
   "Dejsa",
-  "Ball",
-  "Bedroom 1"
+  "Fado",
+  "Strip"
 };
 
-const int size = sizeof(aliases)/sizeof(aliases[0]);
+extern int size;
 
 #endif

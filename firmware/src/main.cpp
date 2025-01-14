@@ -9,7 +9,11 @@
 #include "esp_sleep.h"
 #include "typedef/command.h"
 #include "typedef/menu_item.h"
-#include "icon_bitmap.h"
+
+#include "task_device_setup/task_device_setup.h"
+#include "task_update_flash/task_update_flash.h"
+#include "task_display/task_display.h"
+#include "task_command/task_command.h"
 
 // ------------------- Libraries ------------------------ //
 #include <ArduinoJson.h>
@@ -37,17 +41,17 @@ AiEsp32RotaryEncoderNumberSelector quick_number_selector = AiEsp32RotaryEncoderN
 AiEsp32RotaryEncoder menu_rotary_encoder = AiEsp32RotaryEncoder(MENU_ROTARY_DT, MENU_ROTARY_CLK, MENU_ROTARY_SW, VCC_PIN, ROTARY_ENCODER_STEPS);
 
 //Queue Set up
-static const uint8_t max_command_queue_len = 5;
-static QueueHandle_t command_queue;
+static const uint8_t max_command_queue_len = 10;
+QueueHandle_t command_queue;
 
 static const uint8_t max_toggle_queue_len = 5;
-static QueueHandle_t toggle_queue;
+QueueHandle_t toggle_queue;
 
 static const uint8_t max_brightness_queue_len = 5;
-static QueueHandle_t brightness_queue;
+QueueHandle_t brightness_queue;
 
 static const uint8_t max_color_queue_len = 5;
-static QueueHandle_t color_queue;
+QueueHandle_t color_queue;
 
 
 static const uint8_t max_menu_display_queue_len = 5;
@@ -63,12 +67,10 @@ TimerHandle_t xQuickRotarySwitchTimer;
 //Button Flag
 volatile uint8_t button_state_flag;
 
-//Bulb State Flags
-uint8_t bulb_state_flag;
 
 //Task Handles
 static TaskHandle_t command_read_task_handle = NULL;
-static TaskHandle_t display_task_handle = NULL;
+TaskHandle_t display_task_handle = NULL;
 static TaskHandle_t wifi_task_handle = NULL;
 static TaskHandle_t device_discover_task_handle = NULL;
 static TaskHandle_t toggle_bulb_task_handle = NULL;
@@ -76,7 +78,6 @@ static TaskHandle_t quick_rotary_task_handle = NULL;
 static TaskHandle_t brightness_task_handle = NULL;
 static TaskHandle_t menu_rotary_task_handle = NULL;
 static TaskHandle_t brightness_display_task_handle = NULL;
-static TaskHandle_t individual_display_task_handle = NULL;
 static TaskHandle_t color_task_handle = NULL;
 static TaskHandle_t update_flash_task_handle = NULL;
 
@@ -89,9 +90,11 @@ SemaphoreHandle_t wifiSemaphore;
 
 //Bulbs
 KASAUtil kasaUtil;
-KASASmartBulb* currentBulb;
-KASASmartStrip* currentStrip;
+
 int numberOfBulbs;
+bool all_state = false;
+int size = sizeof(aliases)/sizeof(aliases[0]);
+
 
 //DeviceMode
 uint8_t device_mode = 0b00000001;
@@ -99,7 +102,8 @@ uint8_t device_mode = 0b00000001;
 //Display config
 #define OLED_ADDR 0x3C
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
-menu_item menuItems[12];
+menu_item menuItems[15];
+
 
 //Task Params
 int all_brightness = 0;
@@ -164,14 +168,17 @@ IRAM_ATTR void readEncoderISRMenu(){
         xTaskNotifyGive(display_task_handle);
         xTimerStartFromISR(xIdleTimer, 0);
     }
+
 }
 
 IRAM_ATTR void menuRotaryHandle(){
     xTimerStart(xMenuRotarySwitchTimer, 0);
+    xTimerStartFromISR(xIdleTimer, 0);
 }
 
 IRAM_ATTR void quickRotaryHandle(){
-    
+    xTimerStart(xQuickRotarySwitchTimer, 0);
+    xTimerStartFromISR(xIdleTimer, 0);
 }
 
 // Handles buttons based on current context and adds the command to the queue
@@ -179,12 +186,13 @@ IRAM_ATTR void quickRotaryHandle(){
 void vButtonTimerCallback(TimerHandle_t xTimer){
     command new_command; 
     if(device_mode & 1){
-        for(int i = 0; i < 5; i++){
+        for(int i = 0; i < numberOfBulbs; i++){
             uint8_t curr_bitmask = 1 << i;
             if (button_state_flag & curr_bitmask){
                 button_state_flag &= ~(1 << i);
+                KASADevice* dev = kasaUtil.GetSmartPlugByIndex(i);
+                new_command.value = dev->state;
                 new_command.index = i;
-                new_command.value = 0;
                 new_command.task = 0;
                 if(xQueueSend(command_queue, (void *)&new_command, 10) != pdTRUE){
                     Serial.println("Queue Full");
@@ -236,7 +244,6 @@ void vIdleTimerCallback(TimerHandle_t xIdleTimer){
 }
 
 void vQuickRotaryCallback(TimerHandle_t xQuickRotaryTimer){
-    Serial.println("Rotary Timer Call back");
     command new_command;
     new_command.task = 1;
     new_command.value = quick_number_selector.getValue();
@@ -268,7 +275,8 @@ void vMenuSwitchCallback(TimerHandle_t xMenuRotarySwitchTimer){
     //Handles if button press is trying to select a bulb
     if(curr_type == 0){
         device_mode = 4;
-        xTaskNotifyGive(individual_display_task_handle);
+        xTaskNotifyGive(brightness_display_task_handle);
+        xTimerStart(xModeSwitchTimer, 0);
     //Handles if button press is activating a preset
     } else if (curr_type == 1){
         command color_command;
@@ -293,170 +301,17 @@ void vMenuSwitchCallback(TimerHandle_t xMenuRotarySwitchTimer){
     xTimerStart(xIdleTimer, 0);
 }
 
-void readCommandTask(void *parameter){
-    command curr_command;
-    while(1){
-        if(xQueueReceive(command_queue, (void *)&curr_command, portMAX_DELAY) == pdTRUE){
-            if(curr_command.index < numberOfBulbs){
-                switch(curr_command.task){
-                    case 0: 
-                        if(xQueueSend(toggle_queue, (void *)&curr_command, 10) != pdTRUE){
-                            Serial.println("Toggle Queue is Full");
-                        }
-                        break;
-                    case 1: 
-                        if(xQueueSend(brightness_queue, (void *)&curr_command, 10) != pdTRUE){
-                            Serial.println("Brightness Queue is Full");
-                        }
-                        break;
-                    case 2: 
-                        Serial.println("Temperature Control");
-                        break;
-                    case 3: 
-                        if(xQueueSend(color_queue, (void *)&curr_command, 10) != pdTRUE){
-                            Serial.println("Color queue is full");
-                        }
-
-                        break;
-                }
-            } else {
-                Serial.println("Bulb does not exist");
-            }
+void vQuickSwitchCallback(TimerHandle_t xQuickRotarySwitchTimer){
+    command new_command;
+    new_command.task = 0;
+    new_command.value = all_state;
+    for(int i = 0; i < numberOfBulbs; i++){
+        new_command.index = i;
+        if(xQueueSend(command_queue, (void *)&new_command, 10) != pdTRUE){
+            Serial.println("Queue is Full");
         }
     }
-}
-
-void toggleTask(void *parameter){
-    command toggle_command;
-    while(1){
-        if(xQueueReceive(toggle_queue, (void *)&toggle_command, portMAX_DELAY) == pdTRUE){
-            xSemaphoreTake(wifiSemaphore, portMAX_DELAY);
-            KASADevice* dev = kasaUtil.GetSmartPlugByIndex(toggle_command.index);
-            if(dev->state == 0){
-                dev->turnOn();
-                menuItems[toggle_command.index].icon = 1;
-            } else {
-                dev->turnOff();
-                menuItems[toggle_command.index].icon = 0;
-            }
-            if(dev->err_code == 1){
-                menuItems[toggle_command.index].icon = 2;
-            }
-            xTaskNotifyGive(display_task_handle);
-            xSemaphoreGive(wifiSemaphore);
-        }
-    }
-}
-
-void brightnessTask(void *parameter){
-    command brightness_command;
-    while(1){
-        if(xQueueReceive(brightness_queue, (void *)&brightness_command, portMAX_DELAY) == pdTRUE){
-            xSemaphoreTake(wifiSemaphore, portMAX_DELAY);
-            KASADevice* dev = kasaUtil.GetSmartPlugByIndex(brightness_command.index);
-            dev->setBrightness(brightness_command.value);
-            xSemaphoreGive(wifiSemaphore);
-        }
-    }
-}
-
-void colorTask(void *parameter){
-    command color_command;
-    while(1){
-        if(xQueueReceive(color_queue, (void *)&color_command, portMAX_DELAY) == pdTRUE){
-            xSemaphoreTake(wifiSemaphore, portMAX_DELAY);
-            KASADevice* dev = kasaUtil.GetSmartPlugByIndex(color_command.index);
-            dev->setColor(color_command.value);
-            xSemaphoreGive(wifiSemaphore);
-        }
-    }
-}
-
-void menuDisplayTask(void *parameter){
-    int currItem;
-    int previousItem;
-    int nextItem;
-
-    while(1){
-        //Wait for a signal from the rotary encoder to update the diplay
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        currItem = menu_rotary_encoder.readEncoder();
-        previousItem = currItem - 1;
-        if(previousItem < 0){
-            previousItem = numberOfBulbs + 6;
-        }
-        nextItem = currItem + 1;
-        if(nextItem >= numberOfBulbs + 7){
-            nextItem = 0;
-        }
-
-        display.clearDisplay();
-        display.drawBitmap(4,2,bitmap_array[menuItems[previousItem].icon],16,16,1);
-        display.drawBitmap(4,24,bitmap_array[menuItems[currItem].icon],16,16,1);
-        display.drawBitmap(4,46,bitmap_array[menuItems[nextItem].icon],16,16,1);
-
-        display.drawBitmap(0, 22, bitmap_item_sel_background, 128, 21, 1);
-        display.drawBitmap(120, 0, bitmap_scrollbar_background, 8, 64, 1);
-
-        display.setTextSize(1);
-        display.setTextColor(WHITE);
-
-        //Previous Item
-        display.setFont(&FreeSans9pt7b);
-        display.setCursor(26, 15);
-        display.print(menuItems[previousItem].name);
-
-        //Current Item
-        display.setFont(&FreeSansBold9pt7b);
-        display.setCursor(26, 37);
-        display.print(menuItems[currItem].name);
-
-        //Next Item
-        display.setFont(&FreeSans9pt7b);
-        display.setCursor(26, 59);
-        display.print(menuItems[nextItem].name);
-
-        //Scroll position box
-        display.fillRect(125, (64/(numberOfBulbs + 7)) * currItem, 3, (64/(numberOfBulbs + 7)), WHITE);
-
-        //Display
-        display.display();
-    }
-}
-
-void brightnessDisplayTask(void *parameter){
-    while(1){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        int brightness = quick_number_selector.getValue();
-        display.clearDisplay();
-        display.setFont();
-        display.setCursor(20, 20);
-        display.print("Brightness: ");
-        display.print(brightness);
-        display.print("%");
-        int barWidth = map(brightness, 0, 100, 0, 100);
-        display.drawRect(14, 40, 100, 10, WHITE); // Draw the outline of the bar
-        display.fillRect(14, 40, barWidth, 10, WHITE); // Fill the bar according to currBrightness
-        display.display();
-    }
-}
-
-void individualBulbDisplayTask(void *parameter){
-    while(1){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        xTimerStart(xModeSwitchTimer, 0);
-        int brightness = quick_number_selector.getValue();
-        display.clearDisplay();
-        display.setFont();
-        display.setCursor(20, 20);
-        display.print("Brightness: ");
-        display.print(brightness);
-        display.print("%");
-        int barWidth = map(brightness, 0, 100, 0, 100);
-        display.drawRect(14, 40, 100, 10, WHITE); // Draw the outline of the bar
-        display.fillRect(14, 40, barWidth, 10, WHITE); // Fill the bar according to currBrightness
-        display.display();
-    }
+    all_state = !all_state;
 }
 
 void WiFiEvent(WiFiEvent_t event){
@@ -498,201 +353,13 @@ void connectToWifi(void *parameter){
         vTaskDelete(NULL); 
     }
 }
-void loadDevicesFromMemory(){
-    int read_index = EEPROM.read(1);
-    int data_len = EEPROM.read(2);
-    int currData;
-    char alias[10];
-    char ip[20];
-    while(1){
-        int alias_len = EEPROM.read(read_index);
-
-        if(alias_len == 255){
-            break;
-        }
-
-        read_index++;
-        if(read_index >= 256){
-            read_index = 3;
-        }
-
-        for(int i = 0; i < alias_len; i++){
-            alias[i] = char(EEPROM.read(read_index));
-            read_index++;
-            if(read_index >= 256){
-                read_index = 3;
-            }
-        }
-        int ip_len = EEPROM.read(read_index);
-        for(int i = 0; i < ip_len; i++){
-            ip[i] = char(EEPROM.read(read_index));
-            read_index++;
-            if(read_index >= 256){
-                read_index = 3;
-            }
-        }
-        Serial.println(alias);
-        Serial.println(ip);
-    }   
-
-
-
-/*     for(int i = 0; i < data_len; i++){
-        read_index = i + startRead;
-        if(read_index >= 256){
-            read_index -= 253;
-        }
-        Serial.print(EEPROM.read(read_index));
-        Serial.print(" ");
-    } */
-}
-void addDevices(void *parameter){
-    while(1){
-        xSemaphoreTake(wifiSemaphore, portMAX_DELAY);
-        int read_index = EEPROM.read(1);
-        int data_len = EEPROM.read(2);
-        int alias_len = EEPROM.read(read_index);
-
-        while(alias_len != 255){
-            char alias[10];
-            char ip[20];
-
-            read_index++;
-            if(read_index >= 256){
-                read_index = 3;
-            }
-
-            for(int i = 0; i < alias_len; i++){
-                alias[i] = char(EEPROM.read(read_index));
-                read_index++;
-                if(read_index >= 256){
-                    read_index = 3;
-                }
-            }
-            alias[alias_len] = '\0';
-
-            int ip_len = EEPROM.read(read_index);
-            read_index++;
-            if(read_index >= 256){
-                read_index = 3;
-            }
-
-            for(int i = 0; i < ip_len; i++){
-                ip[i] = char(EEPROM.read(read_index));
-                read_index++;
-                if(read_index >= 256){
-                    read_index = 3;
-                }
-            }
-            ip[ip_len] = '\0';
-        
-            Serial.println(alias);
-            Serial.println(ip);
-
-            const char *alias_ptr = alias;
-            const char *ip_ptr = ip;
-
-            kasaUtil.CreateDevice(alias, ip, "bulb");
-
-            Serial.print("Added from memory: ");
-            Serial.println(alias);
-
-            memset(alias, 0, sizeof(alias));
-            memset(ip, 0, sizeof(ip));
-
-            alias_len = EEPROM.read(read_index);
-        } 
-
- 
-
-        //Load devices from back up first, then scan for new devices or IP address update
-        numberOfBulbs = kasaUtil.ScanDevicesAndAdd(1000, aliases, size);
-        for(int i = 0; i < numberOfBulbs; i++){
-            Serial.println(kasaUtil.GetSmartPlugByIndex(i)->alias);
-            menuItems[i] = {kasaUtil.GetSmartPlugByIndex(i)->alias, 1, 0};
-        }
-        
-        menuItems[numberOfBulbs] = {"White", 1, 1};
-        menuItems[numberOfBulbs + 1] = {"Blue", 1, 1};
-        menuItems[numberOfBulbs + 2] = {"Red", 1, 1};
-        menuItems[numberOfBulbs + 3] = {"Green", 1, 1};
-        menuItems[numberOfBulbs + 4] = {"Purple", 1, 1};
-        menuItems[numberOfBulbs + 5] = {"Reset", 3, 2};
-        menuItems[numberOfBulbs + 6] = {"Save", 3, 3};
-
-        xTaskNotifyGive(display_task_handle);
-        xSemaphoreGive(wifiSemaphore);
-        vTaskSuspend(NULL);
-    }
-}
-
-//memory buffer layout
-//length of alias -> alias
-//length of ip -> ip
-//end = demark
-
-void updateFlash(void *parameter){
-    while(1){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        Serial.println("notified");
-        uint8_t memory_buffer[256];
-        int index = 0;
-        for(int i = 0; i < numberOfBulbs; i++){
-            KASASmartBulb* bulb = static_cast<KASASmartBulb*>(kasaUtil.GetSmartPlugByIndex(i));
-            uint8_t alias_len = static_cast<int>(strlen(bulb->alias));
-            memory_buffer[index] = alias_len;
-            index++;
-            for(int j = 0; j < alias_len; j++){
-                memory_buffer[index] = bulb->alias[j];
-                index++;
-            }
-            uint8_t ip_len = static_cast<int>(strlen(bulb->ip_address));
-            memory_buffer[index] = ip_len;
-            index++;
-            for(int j = 0; j < ip_len; j++){
-                memory_buffer[index] = bulb->ip_address[j];
-                index++;
-            }
-        }
-        memory_buffer[index] = 255;
-        index++;
-
-        //Initializes the begin index for EEPROM memory
-        int begin = EEPROM.read(0);
-
-        //Saves where the program should read from after this write
-        if(begin == 256 - 3){
-            EEPROM.write(1, 2);
-        } else {
-            EEPROM.write(1, begin + 3);
-        }
-
-        //Saves length of new data
-        EEPROM.write(2, index);
-
-
-        for(int i = 0; i < index; i++){
-            if(begin >= 256 - 3){
-                begin = 0;
-            }
-            EEPROM.write(begin + 3, static_cast<int>(memory_buffer[i]));
-            begin++;
-        }
-
-        Serial.println();
-
-        //Write the next begin index into flash
-        EEPROM.write(0, begin);
-        EEPROM.commit();
-    }
-}
 
 
 void setup() {
     Serial.begin(115200);
     vTaskDelay(200/portTICK_PERIOD_MS);
-    // ------------------------------------ WIFI TASK INIT ------------------------------------------ //
 
+    // ------------------------------------ WIFI TASK INIT ------------------------------------------ //
     if (!EEPROM.begin(256)) {
         Serial.println("Failed to initialise EEPROM");
         return;
@@ -724,9 +391,9 @@ void setup() {
     display.clearDisplay();
     // ------------------------------------ KASA BULB INIT ------------------------------------------ //
     xTaskCreate(
-        addDevices,
+        vAddDeviceTask,
         "Device Task",
-        10000,
+        6000,
         NULL,
         3,
         &device_discover_task_handle
@@ -799,14 +466,14 @@ void setup() {
         pdMS_TO_TICKS(50),
         pdFALSE,
         (void *)0,
-        vMenuSwitchCallback
+        vQuickSwitchCallback
     );
 
     
     // ------------------------------------ RUNTIME TASK INIT ------------------------------------------ //
     //Command Read Task Initialization
     xTaskCreate(
-        readCommandTask, 
+        vReadCommandTask, 
         "Command Task",
         2048,
         NULL, 
@@ -815,7 +482,7 @@ void setup() {
     );
 
     xTaskCreate(
-        toggleTask,
+        vToggleTask,
         "Toggle Task", 
         2048, 
         NULL,
@@ -824,7 +491,7 @@ void setup() {
     );
 
     xTaskCreate(
-        brightnessTask,
+        vBrightnessTask,
         "Brightness Task",
         2048,
         NULL,
@@ -833,7 +500,7 @@ void setup() {
     );
 
     xTaskCreate(
-        colorTask,
+        vColorTask,
         "Color Task",
         2048,
         NULL,
@@ -851,11 +518,11 @@ void setup() {
 
     menu_rotary_encoder.begin();
     menu_rotary_encoder.setup(readEncoderISRMenu);
-    menu_rotary_encoder.setBoundaries(0,size + 6,true);
+    menu_rotary_encoder.setBoundaries(0,size + 9,true);
     menu_rotary_encoder.disableAcceleration();
 
     xTaskCreate(
-        menuDisplayTask,
+        vMenuDisplayTask,
         "Menu Display Task",
         4096,
         NULL,
@@ -864,7 +531,7 @@ void setup() {
     );
 
     xTaskCreate(
-        brightnessDisplayTask,
+        vBrightnessDisplayTask,
         "Brightness Display Task",
         4096,
         &all_brightness,
@@ -873,16 +540,7 @@ void setup() {
     );
 
     xTaskCreate(
-        individualBulbDisplayTask,
-        "Individual Bulb Display Task",
-        4096,
-        NULL,
-        1,
-        &individual_display_task_handle
-    );
-
-    xTaskCreate(
-        updateFlash,
+        vTaskUpdateFlash,
         "Update Flash",
         4096,
         NULL, 
@@ -912,7 +570,6 @@ void setup() {
 
     //Pin set up for sleep wake up
     xTimerStart(xIdleTimer, portMAX_DELAY);
-
 }
 
 void loop(){
